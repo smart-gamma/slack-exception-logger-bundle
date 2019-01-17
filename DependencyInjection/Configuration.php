@@ -40,7 +40,8 @@ class Configuration implements ConfigurationInterface
                     ->isRequired()
                     ->prototype('array')
                         ->children()
-                            ->booleanNode('enabled')->defaultTrue()->end()
+                            // need to read from env https://github.com/symfony/symfony/issues/24015
+                            ->scalarNode('enabled')->defaultValue('true')->end()
                             ->scalarNode('color')->defaultValue('danger')->end()
                             ->scalarNode('channel')->isRequired()->end()
                             ->arrayNode('exclude_exception')->prototype('scalar')->end()
