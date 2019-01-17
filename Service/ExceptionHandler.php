@@ -8,7 +8,8 @@ namespace Dopiaza\Slack\ExceptionLoggerBundle\Service;
 
 use Psr\Log\LoggerInterface;
 use Symfony\Component\HttpKernel\Event\GetResponseForExceptionEvent;
-use Symfony\Component\Console\Event\ConsoleErrorEvent;
+use Symfony\Component\Security\Core\Authentication\Token\Storage\TokenStorage;
+use Symfony\Component\HttpFoundation\RequestStack;
 
 class ExceptionHandler
 {
@@ -30,18 +31,27 @@ class ExceptionHandler
     /** @var array */
     private $environmentConfigurations;
 
+
+    private $requestStack;
+
     /**
      * @param LoggerInterface $logger
      * @param $environment
      */
-    public function __construct(LoggerInterface $logger, $environment)
+    public function __construct(LoggerInterface $logger,
+                                $environment,
+                                RequestStack $requestStack,
+                                TokenStorage $tokenStorage
+    )
     {
         $this->logger = $logger;
         $this->environment = $environment;
+        $this->requestStack = $requestStack;
+        $this->tokenStorage = $tokenStorage;
     }
 
     /**
-     * Handle kernel exception
+     * Handle the exception
      *
      * @param GetResponseForExceptionEvent $event
      */
@@ -58,28 +68,11 @@ class ExceptionHandler
     }
 
     /**
-     * Handle console error
-     *
-     * @param ConsoleErrorEvent $event
-     */
-    public function onConsoleError(ConsoleErrorEvent $event)
-    {
-        $exception = $event->getError();
-
-        if ($this->shouldProcessException($exception))
-        {
-            $this->postToSlack($exception);
-        }
-
-        return;
-    }
-
-    /**
      * Post exception details to Slack
      *
      * @param \Exception $exception
      */
-    protected function postToSlack(\Throwable $exception)
+    protected function postToSlack(\Exception $exception)
     {
         $url = $this->getWebhook();
         $message = $this->formatSlackMessageForException($exception);
@@ -95,7 +88,7 @@ class ExceptionHandler
      * @param \Exception $exception
      * @return null|string
      */
-    protected function formatSlackMessageForException(\Throwable  $exception)
+    protected function formatSlackMessageForException(\Exception $exception)
     {
         $config = $this->getConfigForEnvironment();
         $json = null;
@@ -109,6 +102,21 @@ class ExceptionHandler
             $fullClassName = get_class($exception);
             $className = preg_replace('/^.*\\\\([^\\\\]+)$/', '$1', $fullClassName);
             $now = new \DateTime();
+
+            $request = $this->requestStack->getMasterRequest();
+            if ($request) {
+                $url = $request->getPathInfo();
+                $referer = $request->headers->get('referer', '');
+            } else {
+                $url = '';
+                $referer = '';
+            }
+            $hostname = gethostname();
+
+            $token = $this->tokenStorage->getToken();
+            if (null !== $token) {
+                $username = $token->getUsername();
+            }
 
             $message = array(
                 'channel' => '#' . $config['channel'],
@@ -147,12 +155,28 @@ class ExceptionHandler
                             array(
                                 'title' => 'File',
                                 'value' => $file,
-                                'short' => 1,
+                                //'short' => 1,
                             ),
                             array(
                                 'title' => 'Line',
                                 'value' => $line,
                                 'short' => 1,
+                            ),
+                            array(
+                                'title' => 'Url',
+                                'value' => $url,
+                            ),
+                            array(
+                                'title' => 'Referer',
+                                'value' => $referer,
+                            ),
+                            array(
+                                'title' => 'Hostname',
+                                'value' => $hostname,
+                            ),
+                            array(
+                                'title' => 'Username',
+                                'value' => $username,
                             ),
                         ),
                     ),
@@ -227,7 +251,7 @@ class ExceptionHandler
      * @param $exception
      * @return bool
      */
-    private function shouldProcessException(\Throwable $exception)
+    private function shouldProcessException($exception)
     {
         $shouldProcess = true;
 
@@ -236,10 +260,11 @@ class ExceptionHandler
         {
             if (array_key_exists('exclude_exception', $config))
             {
+                $className = get_class($exception);
                 $excludeList = $config['exclude_exception'];
                 foreach ($excludeList as $exclude)
                 {
-                    if ($exception instanceof $exclude)
+                    if ($exclude == $className)
                     {
                         $shouldProcess = false;
                         break;
